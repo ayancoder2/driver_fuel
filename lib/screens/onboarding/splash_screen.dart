@@ -1,0 +1,131 @@
+import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'onboarding_screen.dart';
+import '../dashboard/dashboard_screen.dart';
+import '../auth/profile_setup_screen.dart';
+import '../auth/vehicle_info_screen.dart';
+import '../auth/document_verification_screen.dart';
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Timer(const Duration(seconds: 2), _resolveRoute);
+  }
+
+  Future<void> _resolveRoute() async {
+    if (!mounted) return;
+
+    final session = Supabase.instance.client.auth.currentSession;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    // Not logged in → show onboarding
+    if (session == null || session.isExpired || user == null) {
+      await Supabase.instance.client.auth.signOut();
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+        );
+      }
+      return;
+    }
+
+    // Logged in → check what step they're on
+    try {
+      final driver = await Supabase.instance.client
+          .from('drivers')
+          .select('is_profile_completed, documents_submitted, vehicle_type')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (driver == null) {
+        // Driver row missing — send to onboarding
+        debugPrint('[Splash] No driver row found — sending to onboarding');
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+        );
+        return;
+      }
+
+      final docsSubmitted = driver['documents_submitted'] == true;
+      final profileCompleted = driver['is_profile_completed'] == true;
+      final vehicleAdded = driver['vehicle_type'] != null &&
+          (driver['vehicle_type'] as String).isNotEmpty;
+
+      debugPrint('[Splash] docs=$docsSubmitted profile=$profileCompleted vehicle=$vehicleAdded');
+
+      if (!docsSubmitted) {
+        // Has not uploaded documents yet
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const DocumentVerificationScreen()),
+        );
+      } else if (!profileCompleted) {
+        // Uploaded docs but hasn't completed profile
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const ProfileSetupScreen()),
+        );
+      } else if (!vehicleAdded) {
+        // Profile done but vehicle not added
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const VehicleInfoScreen()),
+        );
+      } else {
+        // All steps complete → Dashboard
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        );
+      }
+    } catch (e) {
+      debugPrint('[Splash] Route resolution error: $e — defaulting to Dashboard');
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            const Spacer(),
+            Center(
+              child: Image.asset(
+                'assets/images/logo.png',
+                width: MediaQuery.of(context).size.width * 0.8,
+              ),
+            ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40.0),
+              child: const Text(
+                'Get premium quality fuel delivered directly to your vehicle, wherever you are',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: Colors.black54,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            const SizedBox(height: 60),
+          ],
+        ),
+      ),
+    );
+  }
+}

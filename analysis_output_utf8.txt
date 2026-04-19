@@ -1,0 +1,17 @@
+﻿Analyzing fueldirect_app...                                     
+
+  error - Expected an identifier - lib\screens\dashboard\dashboard_screen.dart:281:15 - missing_identifier
+  error - Expected to find ')' - lib\screens\dashboard\dashboard_screen.dart:281:15 - expected_token
+  error - Expected to find ';' - lib\screens\dashboard\dashboard_screen.dart:285:7 - expected_token
+warning - Dead code - lib\screens\dashboard\dashboard_screen.dart:285:8 - dead_code
+  error - Expected an identifier - lib\screens\dashboard\dashboard_screen.dart:285:8 - missing_identifier
+  error - Unexpected text ';' - lib\screens\dashboard\dashboard_screen.dart:285:8 - unexpected_token
+warning - The label 'bottomNavigationBar' isn't used - lib\screens\dashboard\dashboard_screen.dart:286:7 - unused_label
+  error - Expected to find ';' - lib\screens\dashboard\dashboard_screen.dart:315:7 - expected_token
+  error - Expected an identifier - lib\screens\dashboard\dashboard_screen.dart:315:8 - missing_identifier
+  error - Expected to find ';' - lib\screens\dashboard\dashboard_screen.dart:315:8 - expected_token
+  error - Unexpected text ';' - lib\screens\dashboard\dashboard_screen.dart:315:8 - unexpected_token
+  error - Expected an identifier - lib\screens\dashboard\dashboard_screen.dart:316:5 - missing_identifier
+  error - Unexpected text ';' - lib\screens\dashboard\dashboard_screen.dart:316:5 - unexpected_token
+   info - Unnecessary empty statement - lib\screens\dashboard\dashboard_screen.dart:316:6 - empty_statements
+

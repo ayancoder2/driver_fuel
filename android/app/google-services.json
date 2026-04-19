@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "989388396775",
+    "project_id": "fueldirect-462cc",
+    "storage_bucket": "fueldirect-462cc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:989388396775:android:3742ab408e38b6b508ea42",
+        "android_client_info": {
+          "package_name": "com.fueldirect.fueldirect_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDY1I20EHTfnY3ahp2AQRxABd03TJOmiFI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

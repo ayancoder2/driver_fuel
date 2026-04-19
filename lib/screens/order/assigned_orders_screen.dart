@@ -1,0 +1,687 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../widgets/floating_bottom_nav_bar.dart';
+import '../../services/notification_service.dart';
+import '../dashboard/dashboard_screen.dart';
+import 'order_details_screen.dart';
+
+class AssignedOrdersScreen extends StatefulWidget {
+  const AssignedOrdersScreen({super.key});
+
+  @override
+  State<AssignedOrdersScreen> createState() => _AssignedOrdersScreenState();
+}
+
+class _AssignedOrdersScreenState extends State<AssignedOrdersScreen> {
+  int _activeFilterIndex = 0;
+  final List<String> _filters = [
+    'Available',
+    'Assigned',
+    'Emergency',
+    'Delivered',
+  ];
+
+  // ── Local order state (replaces stream() for realtime reliability) ──
+  List<Map<String, dynamic>> _orders = [];
+  bool _isLoadingOrders = true;
+  String? _ordersError;
+  RealtimeChannel? _ordersChannel;
+
+  // ── Driver online status ──
+  StreamSubscription<List<Map<String, dynamic>>>? _driverStatusSubscription;
+  bool? _isOnline;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToDriverStatus();
+    _fetchOrders();
+    _subscribeToOrderChanges();
+  }
+
+  @override
+  void dispose() {
+    _ordersChannel?.unsubscribe();
+    _driverStatusSubscription?.cancel();
+    super.dispose();
+  }
+
+  // ── Initial fetch ──────────────────────────────────────────────────
+
+  Future<void> _fetchOrders() async {
+    try {
+      if (mounted) setState(() { _isLoadingOrders = true; _ordersError = null; });
+      final data = await Supabase.instance.client
+          .from('orders')
+          .select()
+          .order('created_at', ascending: false);
+      debugPrint('[Orders] Initial fetch: ${data.length} orders');
+      if (mounted) setState(() { _orders = List<Map<String, dynamic>>.from(data); _isLoadingOrders = false; });
+    } catch (e) {
+      debugPrint('[Orders] Fetch error: $e');
+      if (mounted) setState(() { _isLoadingOrders = false; _ordersError = e.toString(); });
+    }
+  }
+
+  // ── Realtime channel (INSERT / UPDATE / DELETE) ────────────────────
+
+  void _subscribeToOrderChanges() {
+    // Unsubscribe any existing channel first
+    _ordersChannel?.unsubscribe();
+
+    _ordersChannel = Supabase.instance.client
+        .channel('public:orders:driver_view')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'orders',
+          callback: (payload) {
+            debugPrint('[Realtime] ORDER INSERT id=${payload.newRecord['id']} status=${payload.newRecord['status']}');
+            if (!mounted) return;
+            setState(() {
+              // Prepend new order — it goes to top of Available tab
+              _orders.insert(0, Map<String, dynamic>.from(payload.newRecord));
+            });
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'orders',
+          callback: (payload) {
+            final updated = Map<String, dynamic>.from(payload.newRecord);
+            debugPrint('[Realtime] ORDER UPDATE id=${updated['id']} status=${updated['status']} driver=${updated['driver_id']}');
+            if (!mounted) return;
+            setState(() {
+              final idx = _orders.indexWhere((o) => o['id'] == updated['id']);
+              if (idx != -1) {
+                _orders[idx] = updated; // In-place update → tab filter reacts instantly
+              } else {
+                _orders.insert(0, updated); // New row we didn't have yet
+              }
+            });
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'orders',
+          callback: (payload) {
+            final deletedId = payload.oldRecord['id'];
+            debugPrint('[Realtime] ORDER DELETE id=$deletedId');
+            if (!mounted) return;
+            setState(() => _orders.removeWhere((o) => o['id'] == deletedId));
+          },
+        )
+        .subscribe((status, error) {
+          debugPrint('[Realtime] Channel status: $status${error != null ? ' | error: $error' : ''}');
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            debugPrint('[Realtime] ✓ Subscribed to orders changes');
+          } else if (status == RealtimeSubscribeStatus.channelError ||
+                     status == RealtimeSubscribeStatus.timedOut) {
+            debugPrint('[Realtime] ✗ Subscription failed — retrying in 3s');
+            Future.delayed(const Duration(seconds: 3), () {
+              if (mounted) _subscribeToOrderChanges();
+            });
+          }
+        });
+  }
+
+  void _listenToDriverStatus() {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user != null) {
+      _driverStatusSubscription = Supabase.instance.client
+          .from('drivers')
+          .stream(primaryKey: ['id'])
+          .eq('id', user.id)
+          .listen((data) {
+        if (!mounted) return;
+        // Only update when we have actual data — empty list means a
+        // transient reconnect/poll with no rows yet; ignore it so we
+        // don't flash the offline screen while the driver is online.
+        if (data.isEmpty) return;
+        final statusVal = data.first['status']?.toString().toLowerCase();
+        final newStatus = statusVal == 'online';
+        if (_isOnline != newStatus) {
+          setState(() => _isOnline = newStatus);
+        }
+      }, onError: (err) {
+        debugPrint("Error listening to driver status: $err");
+        // Do NOT override _isOnline on transient errors — keep the last
+        // known state so the screen doesn't flash offline incorrectly.
+      });
+    } else {
+      if (mounted) setState(() => _isOnline = false);
+    }
+  }
+
+  Future<void> _acceptOrder(String orderId) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) throw Exception("Not logged in");
+
+      // Verify availability — also fetch user_id to notify the customer
+      final orderRes = await Supabase.instance.client
+          .from('orders')
+          .select('status, user_id')
+          .eq('id', orderId)
+          .maybeSingle();
+
+      const pendingStatuses = ['available', 'pending', 'PENDING'];
+      if (orderRes == null || !pendingStatuses.contains(orderRes['status'])) {
+        throw Exception("Order is no longer available.");
+      }
+
+      // ─ Optimistic local update: instantly move to Assigned tab ─
+      // The realtime event will confirm, but UI reacts immediately.
+      final now = DateTime.now().toUtc().toIso8601String();
+      setState(() {
+        final idx = _orders.indexWhere((o) => o['id'] == orderId);
+        if (idx != -1) {
+          _orders[idx] = Map<String, dynamic>.from(_orders[idx])
+            ..['status'] = 'assigned'
+            ..['driver_id'] = user.id
+            ..['assigned_at'] = now;
+        }
+        _activeFilterIndex = 1; // Switch to Assigned tab
+      });
+
+      // Commit to DB
+      await Supabase.instance.client.from('orders').update({
+        'status': 'assigned',
+        'driver_id': user.id,
+        'assigned_at': now,
+      }).eq('id', orderId);
+
+      // Notify the customer (fire-and-forget)
+      final userId = orderRes['user_id']?.toString();
+      if (userId != null && userId.isNotEmpty) {
+        NotificationService.notifyUserOrderAccepted(userId, orderId);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Order accepted successfully!',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF4CAF50),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(20),
+          ),
+        );
+      }
+    } catch (e) {
+      // Roll back optimistic update on failure
+      debugPrint('[Orders] Accept failed — rolling back optimistic update: $e');
+      await _fetchOrders(); // Refresh from DB to restore correct state
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: Colors.red, content: Text("Failed: $e")),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFBFBFB),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                ),
+              ],
+            ),
+            child: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new,
+                color: Colors.black,
+                size: 18,
+              ),
+              onPressed: () {
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                } else {
+                  // If arrived via Bottom Nav Bar (pushReplacement), go back to Dashboard
+                  Navigator.of(context).pushReplacement(
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) => const DashboardScreen(),
+                      transitionDuration: Duration.zero,
+                      reverseTransitionDuration: Duration.zero,
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ),
+        title: const Text(
+          'Assigned Orders',
+          style: TextStyle(
+            color: Color(0xFF1F1F1F),
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: Column(
+        children: [
+          const SizedBox(height: 12),
+          // Filter Tabs
+          SizedBox(
+            height: 40,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: _filters.length,
+              itemBuilder: (context, index) {
+                bool isActive = _activeFilterIndex == index;
+                return GestureDetector(
+                  onTap: () => setState(() => _activeFilterIndex = index),
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? const Color(0xFFFF4D00)
+                          : const Color(0xFFEEEEEE),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      _filters[index],
+                      style: TextStyle(
+                        color: isActive
+                            ? Colors.white
+                            : const Color(0xFF888888),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          Expanded(
+            child: _isOnline == null
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF4D00)))
+                : _isLoadingOrders
+                    ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF4D00)))
+                    : _ordersError != null
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.wifi_off_rounded, size: 64, color: Colors.grey),
+                                const SizedBox(height: 16),
+                                const Text('Failed to load orders',
+                                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 24),
+                                ElevatedButton.icon(
+                                  onPressed: () { _fetchOrders(); _subscribeToOrderChanges(); },
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Retry'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFF4D00),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : _buildOrderList(),
+          ),
+        ],
+      ),
+      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 1),
+    );
+  }
+
+  Widget _buildOrderList() {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+
+    // Show offline message only on the Available tab
+    if (_activeFilterIndex == 0 && _isOnline == false) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            const Text(
+              'You are currently Offline',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1F1F1F),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Go online from the Dashboard to see available orders.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF888888)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final filteredOrders = _orders.where((o) {
+      final status = o['status']?.toString().toLowerCase().trim() ?? '';
+      final driverId = o['driver_id'];
+      final myId = currentUser?.id;
+
+      bool isAvailableStatus() =>
+          (status == 'available' || status == 'pending') &&
+          (driverId == null || driverId == '');
+
+      if (_activeFilterIndex == 0) return isAvailableStatus();
+      if (_activeFilterIndex == 1) {
+        return (status == 'assigned' || status == 'accepted' ||
+                status == 'in_progress' || status == 'driver_arrived' ||
+                status == 'on_the_way') &&
+            driverId == myId;
+      }
+      if (_activeFilterIndex == 2) return status == 'emergency' && driverId == myId;
+      if (_activeFilterIndex == 3) {
+        return (status == 'delivered' || status == 'completed') && driverId == myId;
+      }
+      return false;
+    }).toList();
+
+    if (filteredOrders.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.inbox_outlined, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              'No ${_filters[_activeFilterIndex].toLowerCase()} orders yet.',
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.only(left: 16, right: 16, bottom: 100),
+      itemCount: filteredOrders.length,
+      itemBuilder: (context, index) {
+        final order = filteredOrders[index];
+        final statusLow = order['status']?.toString().toLowerCase() ?? '';
+        final isEmergencyOrder = statusLow == 'emergency';
+        final isAvailable = (statusLow == 'available' || statusLow == 'pending') &&
+            (order['driver_id'] == null || order['driver_id'] == '');
+
+        String formattedTime = '--:--';
+        if (isAvailable) {
+          formattedTime = 'NEW';
+        } else {
+          final timeSource = order['assigned_at'] ?? order['accepted_at'] ?? order['created_at'];
+          if (timeSource != null) {
+            try {
+              final parsedTime = DateTime.parse(timeSource.toString()).toLocal();
+              final int hour = parsedTime.hour;
+              final int min = parsedTime.minute;
+              final String ampm = hour >= 12 ? 'PM' : 'AM';
+              final int displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+              formattedTime = '${displayHour.toString().padLeft(2, '0')}:${min.toString().padLeft(2, '0')} $ampm';
+            } catch (_) {}
+          }
+        }
+
+        return _buildOrderCard(
+          id: order['id'],
+          time: formattedTime,
+          address: order['delivery_address'] ?? 'Unknown Location',
+          distance: 'Location Coordinates',
+          fuelType: '${order['fuel_quantity'] ?? order['fuel_quantity_gallons'] ?? '0'} Gal ${order['fuel_type'] ?? 'Fuel'}',
+          tag: isAvailable ? 'AVAILABLE' : (isEmergencyOrder ? 'EMERGENCY' : order['status']?.toString().toUpperCase() ?? 'N/A'),
+          tagColor: isAvailable ? const Color(0xFFE8F5E9) : (isEmergencyOrder ? const Color(0xFFFFE8DD) : const Color(0xFFF3F3F3)),
+          isEmergency: isEmergencyOrder,
+          isAvailable: isAvailable,
+          fullDataMap: order,
+        );
+      },
+    );
+  }
+
+  Widget _buildOrderCard({
+    required String id,
+    required String time,
+    required String address,
+    required String distance,
+    required String fuelType,
+    required String tag,
+    required Color tagColor,
+    required bool isEmergency,
+    bool isAvailable = false,
+    required Map<String, dynamic> fullDataMap,
+  }) {
+    // Generate a short ID string like "#ORD-A8B2"
+    final shortId = '#ORD-${id.substring(0, 4).toUpperCase()}';
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF2F2F2)),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 16,
+            bottom: 16,
+            child: Container(width: 3, color: const Color(0xFFFF4D00)),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      shortId,
+                      style: const TextStyle(
+                        color: Color(0xFFFF4D00),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: tagColor,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        tag,
+                        style: TextStyle(
+                          color: isEmergency || tag == 'AVAILABLE'
+                              ? const Color(0xFFFF4D00)
+                              : const Color(0xFF888888),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      time,
+                      style: const TextStyle(
+                        color: Color(0xFFFF4D00),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  address,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1F1F1F),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on,
+                      size: 14,
+                      color: Color(0xFF666666),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      distance,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF888888),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: Color(0xFFF2F2F2)),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFE8DD),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.local_gas_station,
+                        color: Color(0xFFFF4D00),
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Fuel Type',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF888888),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          Text(
+                            fuelType,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1F1F1F),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      height: 40,
+                      width: isAvailable ? 110 : (tag == 'COMPLETED' ? 110 : 130),
+                      child: ElevatedButton(
+                        onPressed: () {
+                          if (isAvailable) {
+                            _acceptOrder(id);
+                          } else {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => OrderDetailsScreen(order: fullDataMap),
+                              ),
+                            );
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isAvailable || isEmergency
+                              ? const Color(0xFFFF4D00)
+                              : const Color(0xFFAAAAAA),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                              if (isAvailable) ...[
+                                const Text(
+                                  'ACCEPT',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ] else if (isEmergency) ...[
+                                const Icon(Icons.explore, size: 18),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'GO',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ] else ...[
+                                const Text(
+                                  'Details',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
