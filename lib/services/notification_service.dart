@@ -211,6 +211,8 @@ class NotificationService {
   /// Driver accepts an order → notify the customer user.
   static void notifyUserOrderAccepted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Order Accepted → notifying user $userId');
+    // User notification is now handled by SQL Trigger fn_notify_order_status_change
+    /*
     unawaited(_sendNotification(
       targetType: 'user',
       targetId: userId,
@@ -218,6 +220,7 @@ class NotificationService {
       body: 'A driver has accepted your order and is on the way!',
       data: {'type': 'order_update', 'order_id': orderId},
     ));
+    */
     unawaited(saveDriverNotification(
       title: 'Order Accepted',
       message: 'You accepted order #${orderId.substring(0, 4).toUpperCase()}',
@@ -229,6 +232,8 @@ class NotificationService {
   /// Driver starts delivery → notify the customer user.
   static void notifyUserDeliveryStarted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Delivery Started → notifying user $userId');
+    // User notification is now handled by SQL Trigger
+    /*
     unawaited(_sendNotification(
       targetType: 'user',
       targetId: userId,
@@ -236,11 +241,14 @@ class NotificationService {
       body: 'Your fuel delivery is on its way to you!',
       data: {'type': 'order_update', 'order_id': orderId},
     ));
+    */
   }
 
   /// Driver arrives → notify the customer user.
   static void notifyUserDriverArrived(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Driver Arrived → notifying user $userId');
+    // User notification is now handled by SQL Trigger
+    /*
     unawaited(_sendNotification(
       targetType: 'user',
       targetId: userId,
@@ -248,6 +256,7 @@ class NotificationService {
       body: 'Your driver has arrived at your location!',
       data: {'type': 'order_update', 'order_id': orderId},
     ));
+    */
   }
 
   /// Driver triggers emergency → notify the customer user.
@@ -265,6 +274,8 @@ class NotificationService {
   /// Order completed → notify the customer user.
   static void notifyUserOrderCompleted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Order Completed → notifying user $userId');
+    // User notification is now handled by SQL Trigger
+    /*
     unawaited(_sendNotification(
       targetType: 'user',
       targetId: userId,
@@ -272,6 +283,7 @@ class NotificationService {
       body: 'Your fuel delivery has been completed. Thank you!',
       data: {'type': 'order_completed', 'order_id': orderId},
     ));
+    */
     unawaited(saveDriverNotification(
       title: 'Delivery Completed',
       message:
