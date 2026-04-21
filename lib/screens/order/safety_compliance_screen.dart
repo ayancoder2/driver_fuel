@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/notification_service.dart';
 import 'delivery_complete_screen.dart';
 
+
 class SafetyComplianceScreen extends StatefulWidget {
   final String? meterPhotoUrl;
   final double deliveredGallons;
@@ -321,6 +322,14 @@ class _SafetyComplianceScreenState extends State<SafetyComplianceScreen> {
                                 userId, orderId);
                           }
                           
+                          // Trigger Notification
+                          NotificationService.showImmediateNotification(
+                            title: 'Delivery Complete! ✅',
+                            body: 'Order #${orderId.substring(0, 4).toUpperCase()} has been successfully delivered.',
+                            type: 'order',
+                            orderId: orderId,
+                          );
+
                           // Step 4: Insert into earnings table
                           try {
                             await Supabase.instance.client.from('earnings').insert({

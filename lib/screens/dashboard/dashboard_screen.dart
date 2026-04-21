@@ -8,7 +8,9 @@ import '../order/notifications_screen.dart';
 import '../order/order_tracking_screen.dart';
 import '../order/assigned_orders_screen.dart';
 import '../profile/settings_screen.dart';
+import '../../services/notification_service.dart';
 import '../../widgets/floating_bottom_nav_bar.dart';
+
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -67,7 +69,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
           _isFuelLoading = false;
         });
+
+        // Trigger Welcome Notification once profile is loaded
+        NotificationService.showImmediateNotification(
+          title: 'Welcome back! 👋',
+          body: 'Good to see you, $_driverName! Ready to deliver today?',
+          type: 'system',
+        );
       } else if (mounted) {
+
         setState(() {
           _driverName = user.email?.split('@')[0] ?? 'Driver Team';
           _truckId = 'Fuel Tanker - 01';

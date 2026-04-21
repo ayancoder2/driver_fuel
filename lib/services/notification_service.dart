@@ -45,6 +45,12 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(channel);
 
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      debugPrint('[Notif] User granted permission');
+    } else {
+      debugPrint('[Notif] User declined or has not accepted permission');
+    }
+
     // 3. Init flutter_local_notifications
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -187,7 +193,10 @@ class NotificationService {
   }) async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        debugPrint('[Notif] saveDriverNotification: no authenticated user — skipping');
+        return;
+      }
 
       final row = <String, dynamic>{
         'driver_id': user.id,
@@ -212,15 +221,6 @@ class NotificationService {
   static void notifyUserOrderAccepted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Order Accepted → notifying user $userId');
     // User notification is now handled by SQL Trigger fn_notify_order_status_change
-    /*
-    unawaited(_sendNotification(
-      targetType: 'user',
-      targetId: userId,
-      title: 'Order Accepted 🚗',
-      body: 'A driver has accepted your order and is on the way!',
-      data: {'type': 'order_update', 'order_id': orderId},
-    ));
-    */
     unawaited(saveDriverNotification(
       title: 'Order Accepted',
       message: 'You accepted order #${orderId.substring(0, 4).toUpperCase()}',
@@ -232,31 +232,14 @@ class NotificationService {
   /// Driver starts delivery → notify the customer user.
   static void notifyUserDeliveryStarted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Delivery Started → notifying user $userId');
-    // User notification is now handled by SQL Trigger
-    /*
-    unawaited(_sendNotification(
-      targetType: 'user',
-      targetId: userId,
-      title: 'Delivery On The Way 🚛',
-      body: 'Your fuel delivery is on its way to you!',
-      data: {'type': 'order_update', 'order_id': orderId},
-    ));
-    */
+    // User notification is now handled by SQL Trigger fn_notify_order_status_change
   }
 
   /// Driver arrives → notify the customer user.
   static void notifyUserDriverArrived(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Driver Arrived → notifying user $userId');
-    // User notification is now handled by SQL Trigger
-    /*
-    unawaited(_sendNotification(
-      targetType: 'user',
-      targetId: userId,
-      title: 'Driver Arrived 📍',
-      body: 'Your driver has arrived at your location!',
-      data: {'type': 'order_update', 'order_id': orderId},
-    ));
-    */
+    // User notification is now handled by SQL Trigger fn_notify_order_status_change
+  }
   }
 
   /// Driver triggers emergency → notify the customer user.
@@ -275,15 +258,10 @@ class NotificationService {
   static void notifyUserOrderCompleted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Order Completed → notifying user $userId');
     // User notification is now handled by SQL Trigger
-    /*
-    unawaited(_sendNotification(
-      targetType: 'user',
-      targetId: userId,
-      title: 'Order Completed ✅',
-      body: 'Your fuel delivery has been completed. Thank you!',
-      data: {'type': 'order_completed', 'order_id': orderId},
-    ));
-    */
+  /// Order completed → notify the customer user.
+  static void notifyUserOrderCompleted(String userId, String orderId) {
+    debugPrint('[Notif] EVENT: Order Completed → notifying user $userId');
+    // User notification is now handled by SQL Trigger
     unawaited(saveDriverNotification(
       title: 'Delivery Completed',
       message:
@@ -328,34 +306,17 @@ class NotificationService {
       return;
     }
 
+    // Show local notification
+    _showLocalNotification(message);
+
     // Fallback: Save to DB locally if received in foreground
     final type = message.data['type'] ?? 'system';
-    saveDriverNotification(
+    unawaited(saveDriverNotification(
       title: notification.title ?? 'New Update',
       message: notification.body ?? '',
       type: type,
-    );
-
-    // Show local notification (appears in system tray even while app is open)
-    _localPlugin.show(
-      message.hashCode,
-      notification.title,
-      notification.body,
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'order_updates',
-          'Order Updates',
-          channelDescription:
-              'Fuel delivery order status and chat notifications',
-          importance: Importance.max,
-          priority: Priority.high,
-          color: Color(0xFFFF4D00),
-          playSound: true,
-          enableVibration: true,
-        ),
-      ),
-      payload: jsonEncode(message.data),
-    );
+      orderId: message.data['order_id'],
+    ));
 
     // Show in-app SnackBar banner
     final ctx = navigatorKey.currentContext;
@@ -402,9 +363,32 @@ class NotificationService {
           duration: const Duration(seconds: 5),
         ),
       );
-    } else {
-      debugPrint('[Notif] ⚠ Cannot show SnackBar — navigatorKey has no context');
     }
+  }
+
+  static void _showLocalNotification(RemoteMessage message) {
+    final notification = message.notification;
+    if (notification == null) return;
+
+    _localPlugin.show(
+      message.hashCode,
+      notification.title,
+      notification.body,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'order_updates',
+          'Order Updates',
+          channelDescription:
+              'Fuel delivery order status and chat notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+          color: Color(0xFFFF4D00),
+          playSound: true,
+          enableVibration: true,
+        ),
+      ),
+      payload: jsonEncode(message.data),
+    );
   }
 
   static void _handleNotificationTap(RemoteMessage message) {
@@ -421,6 +405,58 @@ class NotificationService {
     } catch (e) {
       debugPrint('[Notif] Failed to parse notification payload: $e');
     }
+  }
+
+  // ── Immediate Notification Helper ────────────────────────────────────
+
+  static Future<void> showImmediateNotification({
+    required String title,
+    required String body,
+    required String type,
+    String? orderId,
+  }) async {
+    try {
+      // 1. Show Local Notification
+      const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+        'immediate_notifications',
+        'App Notifications',
+        channelDescription: 'Real-time feedback for driver actions',
+        importance: Importance.max,
+        priority: Priority.high,
+        color: Color(0xFFFF6600),
+      );
+
+      const NotificationDetails platformDetails =
+          NotificationDetails(android: androidDetails);
+
+      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      await _localPlugin.show(
+        id,
+        title,
+        body,
+        platformDetails,
+      );
+
+      // 2. Save to History for this driver
+      unawaited(saveDriverNotification(
+        title: title,
+        message: body,
+        type: type,
+        orderId: orderId,
+      ));
+      
+      debugPrint('[Notif] Immediate notification triggered: $title');
+    } catch (e) {
+      debugPrint('[Notif] Error showing immediate notification: $e');
+    }
+  }
+
+  static Future<void> showTestNotification() async {
+    await showImmediateNotification(
+      title: 'Test Notification 🔔',
+      body: 'This is a test to verify the system works.',
+      type: 'system',
+    );
   }
 
   // ── Navigation on Tap ───────────────────────────────────────────────────

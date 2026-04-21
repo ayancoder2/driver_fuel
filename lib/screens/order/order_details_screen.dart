@@ -5,6 +5,7 @@ import '../../services/notification_service.dart';
 import '../chat/chat_screen.dart';
 import 'delivery_navigation_screen.dart';
 
+
 class OrderDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> order;
 
@@ -515,7 +516,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   NotificationService.notifyUserDeliveryStarted(
                       userId, order['id'].toString());
                 }
+
+                // Trigger Local Notification for Driver
+                NotificationService.showImmediateNotification(
+                  title: 'Delivery Journey Started! 🚀',
+                  body: 'Heading to source location for pickup.',
+                  type: 'order',
+                  orderId: order['id']?.toString(),
+                );
               }
+
 
               if (context.mounted) {
                 Navigator.of(context).push(

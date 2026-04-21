@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../services/notification_service.dart';
+
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -21,16 +23,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   void _loadNotifications() {
     final user = Supabase.instance.client.auth.currentUser;
+    debugPrint('[NotifsScreen] Loading notifications for user: ${user?.id}');
+    
     if (user != null) {
       _notificationsFuture = Supabase.instance.client
           .from('notifications')
           .select()
-          .eq('driver_id', user.id)
+          .or('driver_id.eq.${user.id},user_id.eq.${user.id}')
           .order('created_at', ascending: false);
+      
+      _notificationsFuture.then((data) {
+        debugPrint('[NotifsScreen] Successfully fetched ${data.length} notifications');
+      }).catchError((err) {
+        debugPrint('[NotifsScreen] Error fetching notifications: $err');
+      });
     } else {
       _notificationsFuture = Future.value([]);
     }
   }
+
 
   Future<void> _markAllAsRead() async {
     try {
@@ -88,6 +99,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined, color: Colors.grey, size: 20),
+            onPressed: () async {
+              await NotificationService.showImmediateNotification(
+                title: 'Test Notification 🛠️',
+                body: 'This is a manual test from the debug button.',
+                type: 'system',
+              );
+              _loadNotifications();
+            },
+          ),
           TextButton(
             onPressed: _markAllAsRead,
             child: const Text(
@@ -97,6 +119,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
           const SizedBox(width: 8),
         ],
+
       ),
       body: RefreshIndicator(
         color: const Color(0xFFFF4D00),

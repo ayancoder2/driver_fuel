@@ -1065,7 +1065,45 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
                     width: double.infinity,
                     height: 54,
                     child: ElevatedButton(
+<<<<<<< HEAD
                       onPressed: _onArrived,
+=======
+                      onPressed: () async {
+                        final orderId = widget.order?['id']?.toString();
+                        if (orderId != null) {
+                          try {
+                            final now = DateTime.now().toUtc().toIso8601String();
+                            await Supabase.instance.client.from('orders').update({
+                              'status': 'driver_arrived',
+                              'arrived_at': DateTime.now().toUtc().toIso8601String(),
+                            }).eq('id', widget.order!['id']);
+
+                            widget.order?['status'] = 'driver_arrived';
+                            widget.order?['arrived_at'] = now;
+
+                            // Trigger Notification
+                            NotificationService.showImmediateNotification(
+                              title: 'Arrived at Customer! 📍',
+                              body: 'Please proceed with the safety checklist.',
+                              type: 'order',
+                              orderId: orderId,
+                            );
+                          } catch (e) {
+
+                            debugPrint('Error updating status to driver_arrived: $e');
+                          }
+                        }
+
+                        if (context.mounted) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  SafetyChecklistStartingScreen(order: widget.order),
+                            ),
+                          );
+                        }
+                      },
+>>>>>>> 5aa2e0c (work doneeee)
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _isArrived
                             ? Colors.green.shade600

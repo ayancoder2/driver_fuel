@@ -1,10 +1,25 @@
--- Migration: Notification Triggers for Order Updates
--- Date: 2026-04-20
+-- Migration: Fix Notification Visibility and RLS
+-- Date: 2026-04-21
 
--- 1. Enable the required extensions
-CREATE EXTENSION IF NOT EXISTS pg_net;
+-- 1. Ensure RLS is correctly configured for local insertions from the app
+-- Drop existing policies first to avoid conflicts
+DROP POLICY IF EXISTS "Drivers can insert their own notifications" ON public.notifications;
+DROP POLICY IF EXISTS "Drivers can view their own notifications" ON public.notifications;
+DROP POLICY IF EXISTS "Drivers can update their own notifications" ON public.notifications;
 
--- 2. Create the notification function
+-- Create robust policies
+CREATE POLICY "Drivers can insert their own notifications" ON public.notifications
+    FOR INSERT WITH CHECK (auth.uid() = driver_id);
+
+CREATE POLICY "Drivers can view their own notifications" ON public.notifications
+    FOR SELECT USING (auth.uid() = driver_id);
+
+CREATE POLICY "Drivers can update their own notifications" ON public.notifications
+    FOR UPDATE USING (auth.uid() = driver_id)
+    WITH CHECK (auth.uid() = driver_id);
+
+-- 2. Update the notification trigger function to be more comprehensive
+-- This ensures that even if app-side insertion fails, the DB will record it.
 CREATE OR REPLACE FUNCTION public.fn_notify_order_status_change()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -14,18 +29,15 @@ DECLARE
     notification_title TEXT;
     notification_body TEXT;
     edge_function_url TEXT := 'https://fsxiioldnxdzidcunmma.supabase.co/functions/v1/send-notification';
-    -- Using the project's Anon Key for authorization. 
-    -- This allows the trigger to call the Edge Function securely.
     anon_key TEXT := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzeGlpb2xkbnhkemlkY3VubW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NTcxNTMsImV4cCI6MjA4OTQzMzE1M30.6oI2QCnP4uPdCRF989oOPFsZXyPPr7wkEFioK3lQ1wA';
 BEGIN
     -- Only trigger on certain status changes or new inserts
     IF (OLD.status IS DISTINCT FROM NEW.status) OR (TG_OP = 'INSERT') THEN
         
-        -- Default values
+        -- Logic for pushing notifications via Edge Function
         target_id := NULL;
         target_type := NULL;
         
-        -- Logic for different statuses (case-insensitive)
         CASE LOWER(NEW.status::text)
             WHEN 'assigned' THEN
                 target_id := NEW.driver_id;
@@ -56,6 +68,7 @@ BEGIN
                 target_type := 'user';
                 notification_title := 'Fuel Delivered ✅';
                 notification_body := 'Your fuel has been delivered successfully. Please confirm!';
+
             WHEN 'completed' THEN
                 target_id := NEW.user_id;
                 target_type := 'user';
@@ -63,11 +76,10 @@ BEGIN
                 notification_body := 'Your fuel delivery has been completed. Thank you!';
                 
             ELSE
-                -- No notification for other statuses (e.g. pending, cancelled)
-                RETURN NEW;
+                -- Skip Edge Function if no match
         END CASE;
 
-        -- If we have a recipient, call the edge function
+        -- Trigger Edge Function Notification
         IF target_id IS NOT NULL AND target_type IS NOT NULL THEN
             payload := jsonb_build_object(
                 'target_type', target_type,
@@ -81,8 +93,6 @@ BEGIN
                 )
             );
 
-            -- Use pg_net to call the Edge Function asynchronously
-            -- Use pg_net to call the Edge Function asynchronously
             PERFORM net.http_post(
                 url := edge_function_url,
                 headers := jsonb_build_object(
@@ -92,15 +102,46 @@ BEGIN
                 body := payload
             );
         END IF;
+
+        -- ── DRIVER HISTORY LOGGING ──
+        -- Ensure the driver ALWAYS gets a notification entry for their own actions in history
+        IF NEW.driver_id IS NOT NULL THEN
+            DECLARE
+                driver_history_title TEXT;
+                driver_history_body TEXT;
+            BEGIN
+                CASE LOWER(NEW.status::text)
+                    WHEN 'accepted' THEN
+                        driver_history_title := 'Order Accepted ✓';
+                        driver_history_body := 'Order #' || UPPER(substring(NEW.id::text, 1, 4)) || ' is now in your active queue.';
+                    WHEN 'driver_arrived' THEN
+                        driver_history_title := 'Arrival Logged 📍';
+                        driver_history_body := 'You reached the customer location for order #' || UPPER(substring(NEW.id::text, 1, 4));
+                    WHEN 'in_progress' THEN
+                        driver_history_title := 'Fueling Started 🚛';
+                        driver_history_body := 'Pumping fuel for customer.';
+                    WHEN 'completed' THEN
+                        driver_history_title := 'Delivery Finalized ✅';
+                        driver_history_body := 'Order #' || UPPER(substring(NEW.id::text, 1, 4)) || ' has been closed.';
+                    ELSE 
+                        driver_history_title := NULL;
+                END CASE;
+
+                IF driver_history_title IS NOT NULL THEN
+                    INSERT INTO public.notifications (driver_id, order_id, title, message, body, type)
+                    VALUES (NEW.driver_id, NEW.id, driver_history_title, driver_history_body, driver_history_body, 'order');
+                END IF;
+            EXCEPTION WHEN OTHERS THEN
+                -- Don't crash the main trigger if history logging fails
+                RAISE WARNING 'Failed to log driver notification history: %', SQLERRM;
+            END;
+        END IF;
+
     END IF;
 
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 3. Create the trigger on orders table
-DROP TRIGGER IF EXISTS tr_order_status_notification ON public.orders;
-CREATE TRIGGER tr_order_status_notification
-    AFTER INSERT OR UPDATE ON public.orders
-    FOR EACH ROW
-    EXECUTE FUNCTION public.fn_notify_order_status_change();
+-- 4. Reload schema
+NOTIFY pgrst, 'reload schema';
