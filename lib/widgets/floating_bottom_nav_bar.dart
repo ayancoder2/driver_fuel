@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../screens/dashboard/dashboard_screen.dart';
 import '../screens/order/assigned_orders_screen.dart';
 import '../screens/order/earnings_overview_screen.dart';
+import '../screens/order/notifications_screen.dart';
 import '../screens/profile/settings_screen.dart';
 
 class FloatingBottomNavBar extends StatelessWidget {
@@ -21,9 +22,12 @@ class FloatingBottomNavBar extends StatelessWidget {
         nextScreen = const AssignedOrdersScreen();
         break;
       case 2:
-        nextScreen = const EarningsOverviewScreen();
+        nextScreen = const NotificationsScreen();
         break;
       case 3:
+        nextScreen = const EarningsOverviewScreen();
+        break;
+      case 4:
         nextScreen = const SettingsScreen();
         break;
       default:
@@ -61,8 +65,9 @@ class FloatingBottomNavBar extends StatelessWidget {
         children: [
           _buildNavItem(context, 0, Icons.home_filled),
           _buildNavItem(context, 1, Icons.shopping_cart_rounded),
-          _buildNavItem(context, 2, Icons.layers_outlined),
-          _buildNavItem(context, 3, Icons.person_outline),
+          _buildNavItem(context, 2, Icons.notifications_none_rounded),
+          _buildNavItem(context, 3, Icons.layers_outlined),
+          _buildNavItem(context, 4, Icons.person_outline),
         ],
       ),
     );

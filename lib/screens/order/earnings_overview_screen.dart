@@ -484,7 +484,7 @@ class _EarningsOverviewScreenState extends State<EarningsOverviewScreen> {
           );
         }
       ),
-      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 2),
+      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 3),
     );
   }
 

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../widgets/floating_bottom_nav_bar.dart';
 import '../../services/notification_service.dart';
+import '../dashboard/dashboard_screen.dart';
 
 
 class NotificationsScreen extends StatefulWidget {
@@ -89,7 +91,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             ),
             child: IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black, size: 18),
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () {
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                } else {
+                  Navigator.of(context).pushReplacement(
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) => const DashboardScreen(),
+                      transitionDuration: Duration.zero,
+                      reverseTransitionDuration: Duration.zero,
+                    ),
+                  );
+                }
+              },
             ),
           ),
         ),
@@ -208,6 +222,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         },
       ),
       ),
+      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 2),
     );
   }
 

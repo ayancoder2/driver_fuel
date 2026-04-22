@@ -43,6 +43,7 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
 
   // ── GPS stream ────────────────────────────────────────────────────────────
   final DriverLocationStream _gpsTracker = DriverLocationStream();
+  StreamSubscription<ServiceStatus>? _serviceStatusSub;
 
   // ── Smooth marker animation ───────────────────────────────────────────────
   AnimationController? _markerAnimController;
@@ -114,6 +115,7 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
   @override
   void dispose() {
     _gpsTracker.dispose();
+    _serviceStatusSub?.cancel();
     _markerAnimController?.dispose();
     _mapController?.dispose();
     super.dispose();
@@ -168,7 +170,7 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
       try {
         final fresh = await Supabase.instance.client
             .from('orders')
-            .select()
+            .select('*, profiles:user_id(phone_number)')
             .eq('id', orderId)
             .maybeSingle();
         if (fresh != null) {
@@ -184,11 +186,20 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
           // Also grab address / phone if not yet set
           final freshAddress = fresh['delivery_address']?.toString() ??
               fresh['address']?.toString() ?? address;
-          final freshPhone = fresh['customer_phone']?.toString() ?? _customerPhone;
+          
+          // Enhanced phone resolution: orders.customer_phone -> profiles.phone_number
+          String? freshPhone = fresh['customer_phone']?.toString();
+          if (freshPhone == null || freshPhone.isEmpty) {
+            final profiles = fresh['profiles'];
+            if (profiles is Map) {
+              freshPhone = profiles['phone_number']?.toString();
+            }
+          }
+          
           if (mounted) {
             setState(() {
               _destAddress = freshAddress.isNotEmpty ? freshAddress : 'Customer Location';
-              _customerPhone = freshPhone;
+              _customerPhone = freshPhone ?? _customerPhone;
             });
           }
         }
@@ -299,6 +310,15 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
 
   // ── Start GPS stream ──────────────────────────────────────────────────────
   Future<void> _startLocationStream() async {
+    // 1. Listen for service status changes (auto-recovery)
+    _serviceStatusSub ??= Geolocator.getServiceStatusStream().listen((status) {
+      if (status == ServiceStatus.enabled) {
+        debugPrint('[Location] GPS service enabled — re-starting tracker');
+        if (mounted) setState(() => _gpsDisabled = false);
+        _startLocationStream();
+      }
+    });
+
     final ok = await _gpsTracker.start(
       dbThrottleSeconds: 3,
       onPosition: _onNewPosition,
@@ -624,25 +644,38 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
     if (orderId != null) {
       try {
         final now = DateTime.now().toUtc().toIso8601String();
+        // 1. Update status in DB
         await Supabase.instance.client.from('orders').update({
-          'status': 'assigned',
+          'status': 'driver_arrived',
           'arrived_at': now,
         }).eq('id', orderId);
-        widget.order?['status'] = 'assigned';
+
+        // 2. Update local state
+        widget.order?['status'] = 'driver_arrived';
         widget.order?['arrived_at'] = now;
 
+        // 3. Notify Customer (via helper if desired, but trigger often handles this)
         final userId = widget.order?['user_id']?.toString();
         if (userId != null && userId.isNotEmpty) {
           NotificationService.notifyUserDriverArrived(userId, orderId);
         }
+
+        // 4. Notify Driver (Immediate feedback)
+        NotificationService.showImmediateNotification(
+          title: 'Arrived at Customer! 📍',
+          body: 'Please proceed with the safety checklist.',
+          type: 'order',
+          orderId: orderId,
+        );
+
       } catch (e) {
         debugPrint('[RealTimeDelivery] arrived update error: $e');
       }
     }
+
     if (mounted) {
       Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) =>
-            SafetyChecklistStartingScreen(order: widget.order),
+        builder: (_) => SafetyChecklistStartingScreen(order: widget.order),
       ));
     }
   }
@@ -651,7 +684,17 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
   @override
   Widget build(BuildContext context) {
     // ── Permission / GPS error screens ─────────────────────────────────────
-    if (_gpsDisabled) return _errorScreen('GPS is disabled', 'Please turn on Location Services in your device settings.', Icons.location_disabled_rounded);
+    if (_gpsDisabled) {
+      return _errorScreen(
+        'GPS is disabled',
+        'Please turn on Location Services in your device settings.',
+        Icons.location_disabled_rounded,
+        actionLabel: 'Open GPS Settings',
+        onAction: () async {
+          await Geolocator.openLocationSettings();
+        },
+      );
+    }
     if (_locationPermissionDenied) {
       return _errorScreen(
         'Location Permission Denied',
@@ -824,37 +867,7 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
                       _circleBtn(Icons.arrow_back_ios_new,
                           () => Navigator.of(context).pop(),
                           size: 18),
-                      GestureDetector(
-                        onTap: _openGoogleMaps,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFF4D00),
-                            borderRadius: BorderRadius.circular(22),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFFFF4D00).withValues(alpha: 0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.navigation_rounded,
-                                  color: Colors.white, size: 16),
-                              SizedBox(width: 6),
-                              Text('Navigate',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                      ),
+                      const SizedBox(width: 44), // Placeholder to keep back button left-aligned
                     ],
                   ),
                   const SizedBox(height: 14),
@@ -1065,45 +1078,7 @@ class _RealTimeDeliveryScreenState extends State<RealTimeDeliveryScreen>
                     width: double.infinity,
                     height: 54,
                     child: ElevatedButton(
-<<<<<<< HEAD
                       onPressed: _onArrived,
-=======
-                      onPressed: () async {
-                        final orderId = widget.order?['id']?.toString();
-                        if (orderId != null) {
-                          try {
-                            final now = DateTime.now().toUtc().toIso8601String();
-                            await Supabase.instance.client.from('orders').update({
-                              'status': 'driver_arrived',
-                              'arrived_at': DateTime.now().toUtc().toIso8601String(),
-                            }).eq('id', widget.order!['id']);
-
-                            widget.order?['status'] = 'driver_arrived';
-                            widget.order?['arrived_at'] = now;
-
-                            // Trigger Notification
-                            NotificationService.showImmediateNotification(
-                              title: 'Arrived at Customer! 📍',
-                              body: 'Please proceed with the safety checklist.',
-                              type: 'order',
-                              orderId: orderId,
-                            );
-                          } catch (e) {
-
-                            debugPrint('Error updating status to driver_arrived: $e');
-                          }
-                        }
-
-                        if (context.mounted) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  SafetyChecklistStartingScreen(order: widget.order),
-                            ),
-                          );
-                        }
-                      },
->>>>>>> 5aa2e0c (work doneeee)
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _isArrived
                             ? Colors.green.shade600

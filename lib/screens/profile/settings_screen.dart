@@ -18,7 +18,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _pushNotifications = true;
-  bool _newOrderAlerts = true;
   
   String _driverName = "Loading...";
   String _driverId = "...";
@@ -37,7 +36,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _pushNotifications = prefs.getBool('push_notifications') ?? true;
-      _newOrderAlerts = prefs.getBool('new_order_alerts') ?? true;
       _currentLanguageCode = prefs.getString('app_language') ?? 'en';
     });
   }
@@ -321,23 +319,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              _buildSettingItem(
-                icon: Icons.assignment_outlined,
-                title: 'New Order Alerts',
-                trailing: Transform.scale(
-                  scale: 0.8,
-                  child: Switch(
-                    value: _newOrderAlerts,
-                    onChanged: (val) {
-                      setState(() => _newOrderAlerts = val);
-                      _updatePreference('new_order_alerts', val);
-                    },
-                    activeThumbColor: Colors.white,
-                    activeTrackColor: const Color(0xFFFF4D00),
-                  ),
-                ),
-              ),
 
               const SizedBox(height: 32),
 
@@ -440,7 +421,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 3),
+      bottomNavigationBar: const FloatingBottomNavBar(currentIndex: 4),
     );
   }
 

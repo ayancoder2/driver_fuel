@@ -143,8 +143,8 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
             ),
             Text(
               status,
-              style: const TextStyle(
-                color: Color(0xFFFF4D00),
+              style: TextStyle(
+                color: (status == 'COMPLETED' || status == 'DELIVERED') ? Colors.green : const Color(0xFFFF4D00),
                 fontSize: 12,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
@@ -154,27 +154,28 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         ),
         centerTitle: true,
         actions: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                  ),
-                ],
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.phone, color: Colors.blueAccent, size: 20),
-                onPressed: () {
-                  _makePhoneCall(context, _customerPhone);
-                },
+          if (!(status == 'COMPLETED' || status == 'DELIVERED'))
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.phone, color: Colors.blueAccent, size: 20),
+                  onPressed: () {
+                    _makePhoneCall(context, _customerPhone);
+                  },
+                ),
               ),
             ),
-          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -243,36 +244,37 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         ],
                       ),
                     ),
-                    GestureDetector(
-                      onTap: () {
-                        final userId = order['user_id']?.toString();
-                        if (userId != null && userId.isNotEmpty) {
-                          Navigator.of(context).push(MaterialPageRoute(
-                            builder: (c) => ChatScreen(
-                              orderId: order['id'].toString(),
-                              customerId: userId,
-                              customerName: _customerName,
-                            ),
-                          ));
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Customer information not available for chat.')),
-                          );
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFFF4D00),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.chat_rounded,
-                          color: Colors.white,
-                          size: 20,
+                    if (!(status == 'COMPLETED' || status == 'DELIVERED'))
+                      GestureDetector(
+                        onTap: () {
+                          final userId = order['user_id']?.toString();
+                          if (userId != null && userId.isNotEmpty) {
+                            Navigator.of(context).push(MaterialPageRoute(
+                              builder: (c) => ChatScreen(
+                                orderId: order['id'].toString(),
+                                customerId: userId,
+                                customerName: _customerName,
+                              ),
+                            ));
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Customer information not available for chat.')),
+                            );
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFFF4D00),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.chat_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -357,64 +359,65 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                             letterSpacing: 0.5,
                           ),
                         ),
-                        GestureDetector(
-                          onTap: () async {
-                            // Extract real customer coordinates
-                            double? lat = double.tryParse(
-                                (order['customer_lat'] ?? order['delivery_lat'])?.toString() ?? '');
-                            double? lng = double.tryParse(
-                                (order['customer_lng'] ?? order['delivery_lng'])?.toString() ?? '');
-                            if (lat == 0.0) lat = null;
-                            if (lng == 0.0) lng = null;
+                        if (!(status == 'COMPLETED' || status == 'DELIVERED'))
+                          GestureDetector(
+                            onTap: () async {
+                              // Extract real customer coordinates
+                              double? lat = double.tryParse(
+                                  (order['customer_lat'] ?? order['delivery_lat'])?.toString() ?? '');
+                              double? lng = double.tryParse(
+                                  (order['customer_lng'] ?? order['delivery_lng'])?.toString() ?? '');
+                              if (lat == 0.0) lat = null;
+                              if (lng == 0.0) lng = null;
 
-                            // Try to open in Google Maps first if coordinates exist
-                            if (lat != null && lng != null) {
-                              final mapUrl = Uri.parse(
-                                'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng',
-                              );
-                              if (await canLaunchUrl(mapUrl)) {
-                                await launchUrl(mapUrl, mode: LaunchMode.externalApplication);
-                                return;
+                              // Try to open in Google Maps first if coordinates exist
+                              if (lat != null && lng != null) {
+                                final mapUrl = Uri.parse(
+                                  'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng',
+                                );
+                                if (await canLaunchUrl(mapUrl)) {
+                                  await launchUrl(mapUrl, mode: LaunchMode.externalApplication);
+                                  return;
+                                }
                               }
-                            }
 
-                            // Fallback: open the in-app DeliveryNavigationScreen
-                            if (status == 'ACCEPTED' || status == 'ASSIGNED') {
-                              await Supabase.instance.client.from('orders').update({
-                                'status': 'in_progress',
-                                'accepted_at': DateTime.now().toUtc().toIso8601String(),
-                                'driver_id': Supabase.instance.client.auth.currentUser?.id,
-                              }).eq('id', order['id']);
-                              widget.order['status'] = 'in_progress';
-                              if (context.mounted) {
-                                Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (c) => DeliveryNavigationScreen(order: order)));
+                              // Fallback: open the in-app DeliveryNavigationScreen
+                              if (status == 'ACCEPTED' || status == 'ASSIGNED') {
+                                await Supabase.instance.client.from('orders').update({
+                                  'status': 'in_progress',
+                                  'accepted_at': DateTime.now().toUtc().toIso8601String(),
+                                  'driver_id': Supabase.instance.client.auth.currentUser?.id,
+                                }).eq('id', order['id']);
+                                widget.order['status'] = 'in_progress';
+                                if (context.mounted) {
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (c) => DeliveryNavigationScreen(order: order)));
+                                }
+                                if (context.mounted) {
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (c) => DeliveryNavigationScreen(order: order)));
+                                }
                               }
-                              if (context.mounted) {
-                                Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (c) => DeliveryNavigationScreen(order: order)));
-                              }
-                            }
-                          },
-                          child: Row(
-                            children: const [
-                              Text(
-                                'Navigate',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFFFF4D00),
+                            },
+                            child: Row(
+                              children: const [
+                                Text(
+                                  'Navigate',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFFFF4D00),
+                                  ),
                                 ),
-                              ),
-                              SizedBox(width: 4),
-                              Icon(
-                                Icons.explore,
-                                color: Color(0xFFFF4D00),
-                                size: 16,
-                              ),
-                            ],
+                                SizedBox(width: 4),
+                                Icon(
+                                  Icons.explore,
+                                  color: Color(0xFFFF4D00),
+                                  size: 16,
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -492,65 +495,67 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          color: Colors.white,
-        child: SizedBox(
-          width: double.infinity,
-          height: 58,
-          child: ElevatedButton(
-            onPressed: () async {
-              // Update order status to in_progress / en route
-              if (order['status'] == 'accepted') {
-                await Supabase.instance.client.from('orders').update({
-                  'status': 'in_progress',
-                  'accepted_at': DateTime.now().toUtc().toIso8601String(),
-                  'driver_id': Supabase.instance.client.auth.currentUser?.id,
-                }).eq('id', order['id']);
-                widget.order['status'] = 'in_progress';
+      bottomNavigationBar: (status == 'COMPLETED' || status == 'DELIVERED')
+          ? null
+          : SafeArea(
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                color: Colors.white,
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 58,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      // Update order status to in_progress / en route
+                      if (order['status'] == 'accepted') {
+                        await Supabase.instance.client.from('orders').update({
+                          'status': 'in_progress',
+                          'accepted_at': DateTime.now().toUtc().toIso8601String(),
+                          'driver_id': Supabase.instance.client.auth.currentUser?.id,
+                        }).eq('id', order['id']);
+                        widget.order['status'] = 'in_progress';
 
-                // Notify customer: delivery has started
-                final userId = order['user_id']?.toString();
-                if (userId != null && userId.isNotEmpty) {
-                  NotificationService.notifyUserDeliveryStarted(
-                      userId, order['id'].toString());
-                }
+                        // Notify customer: delivery has started
+                        final userId = order['user_id']?.toString();
+                        if (userId != null && userId.isNotEmpty) {
+                          NotificationService.notifyUserDeliveryStarted(
+                              userId, order['id'].toString());
+                        }
 
-                // Trigger Local Notification for Driver
-                NotificationService.showImmediateNotification(
-                  title: 'Delivery Journey Started! 🚀',
-                  body: 'Heading to source location for pickup.',
-                  type: 'order',
-                  orderId: order['id']?.toString(),
-                );
-              }
+                        // Trigger Local Notification for Driver
+                        NotificationService.showImmediateNotification(
+                          title: 'Delivery Journey Started! 🚀',
+                          body: 'Heading to source location for pickup.',
+                          type: 'order',
+                          orderId: order['id']?.toString(),
+                        );
+                      }
 
-
-              if (context.mounted) {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => DeliveryNavigationScreen(order: widget.order),
+                      if (context.mounted) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                DeliveryNavigationScreen(order: widget.order),
+                          ),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF4D00),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Start Delivery Journey',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
                   ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF4D00),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              elevation: 0,
             ),
-            child: const Text(
-              'Start Delivery Journey',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-          ),
-        ),
-      ),
-      ),
     );
   }
 

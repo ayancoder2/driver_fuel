@@ -8,7 +8,6 @@ import '../order/notifications_screen.dart';
 import '../order/order_tracking_screen.dart';
 import '../order/assigned_orders_screen.dart';
 import '../profile/settings_screen.dart';
-import '../../services/notification_service.dart';
 import '../../widgets/floating_bottom_nav_bar.dart';
 
 

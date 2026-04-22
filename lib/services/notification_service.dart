@@ -60,10 +60,10 @@ class NotificationService {
     );
 
     // 4. Save FCM token and listen for refreshes
-    await updateFcmToken();
+    await syncToken();
     _messaging.onTokenRefresh.listen((newToken) {
       debugPrint('[Notif] FCM token refreshed — updating DB');
-      updateFcmToken();
+      syncToken();
     });
 
     // 5. Foreground messages → show in-app SnackBar + local notification
@@ -86,7 +86,7 @@ class NotificationService {
 
   /// Saves (or refreshes) the FCM token into the `drivers` table.
   /// Uses upsert so it works even if the driver row doesn't exist yet.
-  static Future<void> updateFcmToken() async {
+  static Future<void> syncToken() async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) {
@@ -131,6 +131,9 @@ class NotificationService {
       debugPrint('[Notif] Token update error (non-fatal): $e');
     }
   }
+
+  /// Alias for syncToken to maintain compatibility if needed (deprecated)
+  static Future<void> updateFcmToken() => syncToken();
 
   // ── Core Send via Edge Function ─────────────────────────────────────────
 
@@ -198,20 +201,28 @@ class NotificationService {
         return;
       }
 
+      // Provides ALL columns to satisfy any possible DB constraint
       final row = <String, dynamic>{
         'driver_id': user.id,
+        'user_id': null, // Explicit null satisfies recipient_check
+        'order_id': orderId, // Can be null
         'title': title,
         'message': message,
+        'body': message, // Backwards compatibility for older schema
         'type': type,
         'is_read': false,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       };
-      if (orderId != null) row['order_id'] = orderId;
 
+      debugPrint('[Notif] Attempting DB save: $title');
       await Supabase.instance.client.from('notifications').insert(row);
-      debugPrint('[Notif] Driver notification saved to DB: "$title"');
+      debugPrint('[Notif] Driver notification saved to DB ✓');
+    } on PostgrestException catch (e) {
+      debugPrint('[Notif] DIAGNOSTIC ERROR: ${e.message}');
+      debugPrint('[Notif]   Details: ${e.details}');
+      debugPrint('[Notif]   Hint: ${e.hint}');
     } catch (e) {
-      debugPrint('[Notif] saveDriverNotification error (non-fatal): $e');
+      debugPrint('[Notif] saveDriverNotification unexpected error: $e');
     }
   }
 
@@ -240,7 +251,7 @@ class NotificationService {
     debugPrint('[Notif] EVENT: Driver Arrived → notifying user $userId');
     // User notification is now handled by SQL Trigger fn_notify_order_status_change
   }
-  }
+
 
   /// Driver triggers emergency → notify the customer user.
   static void notifyUserEmergency(String userId, String orderId) {
@@ -254,10 +265,7 @@ class NotificationService {
     ));
   }
 
-  /// Order completed → notify the customer user.
-  static void notifyUserOrderCompleted(String userId, String orderId) {
-    debugPrint('[Notif] EVENT: Order Completed → notifying user $userId');
-    // User notification is now handled by SQL Trigger
+
   /// Order completed → notify the customer user.
   static void notifyUserOrderCompleted(String userId, String orderId) {
     debugPrint('[Notif] EVENT: Order Completed → notifying user $userId');
